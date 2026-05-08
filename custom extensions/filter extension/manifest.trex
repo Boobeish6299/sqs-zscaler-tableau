@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns="http://www.tableau.com/xml/extension_manifest" manifest-version="0.1">
+  <dashboard-extension id="com.squareshift.customhierarchy" extension-version="1.0.0">
+    <default-locale>en_US</default-locale>
+    <name resource-id="CustomHierarchy">Custom Hierarchy Filter</name>
+    <description>Cascading Breadcrumb Hierarchy Filter</description>
+    <author name="SQS" email="[EMAIL_ADDRESS]" organization="SquareShitf" website="[WEBSITE]" />
+    <min-api-version>1.0</min-api-version>
+    <source-location>
+      <url>http://localhost:8767/index.html</url>
+    </source-location>
+    <icon>
+      iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=
+    </icon>
+    <permissions>
+      <permission>full data</permission>
+    </permissions>
+    <context-menu>
+      <configure-context-menu-item />
+    </context-menu>
+  </dashboard-extension>
+  <resources>
+    <resource id="name">
+      <text locale="en_US">Custom Hierarchy Filter</text>
+    </resource>
+  </resources>
+</manifest>

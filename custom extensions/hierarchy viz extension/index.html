@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hierarchy Tree Visualization</title>
+    <script src="https://cdn.jsdelivr.net/gh/tableau/extensions-api/lib/tableau.extensions.1.latest.js"></script>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-color: #333333;
+            --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            --font-size: 13px;
+        }
+        body {
+            font-family: var(--font-family);
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-size: var(--font-size);
+            margin: 0;
+            padding: 10px;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        /* Configuration UI */
+        #config-ui { 
+            display: none; padding: 10px; background: #fff; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); 
+            height: 100vh; overflow-y: auto; box-sizing: border-box; color: #333; font-family: sans-serif;
+        }
+        .config-section { border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 10px; }
+        label { font-weight: bold; display: block; margin-top: 10px; font-size: 12px; }
+        select, input[type="text"], input[type="number"], input[type="color"] { 
+            width: 100%; padding: 6px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; 
+        }
+        input[type="color"] { height: 35px; padding: 2px; }
+        button { 
+            margin-top: 10px; background: #0055A4; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%;
+        }
+        button:hover { background: #003d7a; }
+
+        /* Main UI */
+        #main-ui { display: flex; flex-direction: column; position: relative; }
+        #loading { font-style: italic; opacity: 0.7; margin-bottom: 6px; }
+
+        /* Grid columns: name | Active | LOC Gen | LOC Acc | WS Credits | LOC Com */
+        .grid-row {
+            display: grid;
+            grid-template-columns: 1fr 72px 72px 72px 80px 72px;
+            align-items: center;
+            padding: 4px 8px;
+            gap: 4px;
+        }
+
+        /* Sticky header */
+        #col-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: var(--bg-color);
+            border-bottom: 2px solid rgba(128,128,128,0.25);
+            margin-bottom: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            opacity: 0.75;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        #col-header .metric-cell { text-align: right; }
+
+        /* Tree rows */
+        .tree-node-container { margin-bottom: 2px; }
+
+        .tree-row {
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.15s;
+            border: 1px solid transparent;
+        }
+        .tree-row:hover { background: rgba(128,128,128,0.08); border-color: rgba(128,128,128,0.12); }
+
+        .name-cell {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            min-width: 0;
+        }
+        .chevron-box {
+            flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            width: 18px; height: 18px; border-radius: 3px;
+            background: rgba(128,128,128,0.1);
+            font-size: 9px; transition: transform 0.15s;
+        }
+        .chevron-box.expanded { transform: rotate(90deg); }
+        .chevron-box.empty { visibility: hidden; }
+
+        .node-name { font-weight: 600; font-size: 1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .node-level { font-size: 0.78em; opacity: 0.5; margin-left: 2px; flex-shrink: 0; }
+
+        .metric-cell {
+            text-align: right;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+            cursor: default;
+            white-space: nowrap;
+        }
+
+        .children-container {
+            display: none;
+            padding-left: 18px;
+            border-left: 1px dashed rgba(128,128,128,0.2);
+            margin-left: 12px;
+        }
+        .children-container.expanded { display: block; }
+    </style>
+</head>
+<body>
+    <div id="config-ui">
+        <h3>Visualization Settings</h3>
+        <div class="config-section">
+            <label>Global Font Family:</label>
+            <select id="cfg-font">
+                <option value="'Segoe UI', Tahoma, Geneva, Verdana, sans-serif">Segoe UI / Default</option>
+                <option value="Arial, sans-serif">Arial</option>
+                <option value="'Tableau Book', Arial, sans-serif">Tableau Book</option>
+                <option value="Tahoma, Geneva, sans-serif">Tahoma</option>
+                <option value="'Times New Roman', Times, serif">Times New Roman</option>
+            </select>
+            
+            <label>Base Font Size (e.g. 12px, 14px):</label>
+            <input type="text" id="cfg-size" value="13px" />
+            
+            <label>Background Color:</label>
+            <input type="color" id="cfg-bg" value="#ffffff" />
+            
+            <label>Text Color:</label>
+            <input type="color" id="cfg-text" value="#333333" />
+        </div>
+        <button id="save-btn" onclick="saveConfig()">Save Settings</button>
+    </div>
+
+    <div id="main-ui">
+        <div id="loading">Initializing...</div>
+        <div id="tree-container"></div>
+    </div>
+
+    <script>
+        const METRICS = [
+            'WS Credits', 'LOC Gen', 'LOC Acc', 'Acc %',
+            'LOC Com', 'Com %', 'Active', 'WS Lic'
+        ];
+
+        // Columns to display (order = left to right after the name column)
+        // showArrow: true → compare against siblings and show ▲/▼
+        const COL_DEFS = [
+            { label: 'Active Users', idx: 6, useK: false, showArrow: false },
+            { label: 'LOC Gen',      idx: 1, useK: true,  showArrow: true  },
+            { label: 'LOC Acc',      idx: 2, useK: true,  showArrow: true  },
+            { label: 'WS Credits',   idx: 0, useK: false, showArrow: true  },
+            { label: 'LOC Com',      idx: 4, useK: true,  showArrow: true  },
+        ];
+
+        function formatK(val) {
+            if (val >= 1000000) return (val / 1000000).toFixed(1).replace(/\.0$/, '') + 'M';
+            if (val >= 1000)    return (val / 1000).toFixed(1).replace(/\.0$/, '') + 'K';
+            return Math.round(val).toString();
+        }
+
+        function formatFull(val) {
+            return Math.round(val).toLocaleString();
+        }
+
+        function applyStyles() {
+            const font = tableau.extensions.settings.get('font') || "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
+            const size = tableau.extensions.settings.get('size') || "13px";
+            const bg = tableau.extensions.settings.get('bg') || "#ffffff";
+            const text = tableau.extensions.settings.get('text') || "#333333";
+
+            document.documentElement.style.setProperty('--font-family', font);
+            document.documentElement.style.setProperty('--font-size', size);
+            document.documentElement.style.setProperty('--bg-color', bg);
+            document.documentElement.style.setProperty('--text-color', text);
+            
+            document.getElementById('cfg-font').value = font;
+            document.getElementById('cfg-size').value = size;
+            document.getElementById('cfg-bg').value = bg;
+            document.getElementById('cfg-text').value = text;
+        }
+
+        tableau.extensions.initializeAsync({ 'configure': showConfig }).then(() => {
+            // Automatically show config on first load
+            if (!tableau.extensions.settings.get('bg')) {
+                showConfig();
+                return;
+            }
+            
+            applyStyles();
+            
+            const dashboard = tableau.extensions.dashboardContent.dashboard;
+            const sheet = dashboard.worksheets.find(w => w.name === 'L_Hierarchy_Table');
+            
+            if (sheet) {
+                // Listen for filter changes!
+                sheet.addEventListener(tableau.TableauEventType.FilterChanged, (e) => {
+                    fetchDataAndRender();
+                });
+            }
+
+            // Re-render when any parameter changes (e.g. Start Date, Period, N Weeks)
+            dashboard.getParametersAsync().then(params => {
+                params.forEach(param => {
+                    param.addEventListener(tableau.TableauEventType.ParameterChanged, () => {
+                        fetchDataAndRender();
+                    });
+                });
+            });
+
+            fetchDataAndRender();
+        }).catch(err => {
+            document.getElementById('loading').innerText = 'Error: ' + err.message;
+        });
+
+        function showConfig() {
+            document.getElementById('main-ui').style.display = 'none';
+            document.getElementById('config-ui').style.display = 'block';
+            applyStyles();
+        }
+
+        function saveConfig() {
+            tableau.extensions.settings.set('font', document.getElementById('cfg-font').value);
+            tableau.extensions.settings.set('size', document.getElementById('cfg-size').value);
+            tableau.extensions.settings.set('bg', document.getElementById('cfg-bg').value);
+            tableau.extensions.settings.set('text', document.getElementById('cfg-text').value);
+            
+            tableau.extensions.settings.saveAsync().then(() => {
+                document.getElementById('config-ui').style.display = 'none';
+                document.getElementById('main-ui').style.display = 'flex';
+                applyStyles();
+            });
+        }
+
+        async function fetchDataAndRender() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('loading').innerText = 'Loading data...';
+            
+            const dashboard = tableau.extensions.dashboardContent.dashboard;
+            const sheet = dashboard.worksheets.find(w => w.name === 'L_Hierarchy_Table');
+            
+            if (!sheet) {
+                document.getElementById('loading').innerText = 'Worksheet "L_Hierarchy_Table" not found.';
+                return;
+            }
+
+            try {
+                const dataTable = await sheet.getSummaryDataAsync({ maxRows: 0 });
+                const cols = dataTable.columns;
+                
+                const l2Idx = cols.findIndex(c => c.fieldName === 'L2 (VP)');
+                const l3Idx = cols.findIndex(c => c.fieldName === 'L3 (Manager)');
+                const l4Idx = cols.findIndex(c => c.fieldName === 'L4 (IC)');
+                
+                const metricIdxs = METRICS.map(m => cols.findIndex(c => c.fieldName.includes(m) || c.fieldName === m));
+
+                if (l2Idx === -1 || l3Idx === -1 || l4Idx === -1) {
+                    throw new Error("Hierarchy columns (L2, L3, L4) not found.");
+                }
+
+                let tree = {};
+                
+                dataTable.data.forEach(row => {
+                    const l2 = row[l2Idx].value;
+                    const l3 = row[l3Idx].value;
+                    const l4 = row[l4Idx].value;
+                    
+                    if (!l2 || l2 === '%all%' || l2 === 'Null') return;
+
+                    if (!tree[l2]) tree[l2] = { name: l2, level: 'L2 (VP)', children: {}, metrics: Array(METRICS.length).fill(0) };
+                    
+                    if (l3 && l3 !== '%all%' && l3 !== 'Null') {
+                        if (!tree[l2].children[l3]) {
+                            tree[l2].children[l3] = { name: l3, level: 'L3 (Manager)', children: {}, metrics: Array(METRICS.length).fill(0) };
+                        }
+                        
+                        if (l4 && l4 !== '%all%' && l4 !== 'Null') {
+                            if (!tree[l2].children[l3].children[l4]) {
+                                tree[l2].children[l3].children[l4] = { name: l4, level: 'L4 (IC)', metrics: Array(METRICS.length).fill(0) };
+                            }
+                            METRICS.forEach((m, i) => {
+                                let val = parseFloat(row[metricIdxs[i]]?.value || 0);
+                                if (isNaN(val)) val = 0;
+                                tree[l2].children[l3].children[l4].metrics[i] = val;
+                            });
+                        }
+                    }
+                });
+
+                aggregateMetrics(tree);
+                renderTreeUI(tree);
+                
+                document.getElementById('loading').style.display = 'none';
+            } catch (err) {
+                document.getElementById('loading').innerText = 'Error: ' + err.message;
+                console.error(err);
+            }
+        }
+
+        function aggregateMetrics(nodes) {
+            Object.values(nodes).forEach(node => {
+                if (node.children) {
+                    aggregateMetrics(node.children);
+                    node.metrics = Array(METRICS.length).fill(0);
+                    Object.values(node.children).forEach(child => {
+                        child.metrics.forEach((val, i) => node.metrics[i] += val);
+                    });
+                    
+                    let childCount = Object.keys(node.children).length;
+                    if (childCount > 0) {
+                        const accPctIdx = METRICS.indexOf('Acc %');
+                        const comPctIdx = METRICS.indexOf('Com %');
+                        if (accPctIdx > -1) node.metrics[accPctIdx] = node.metrics[accPctIdx] / childCount;
+                        if (comPctIdx > -1) node.metrics[comPctIdx] = node.metrics[comPctIdx] / childCount;
+                    }
+                }
+            });
+        }
+
+        function renderTreeUI(tree) {
+            const container = document.getElementById('tree-container');
+            container.innerHTML = '';
+
+            // Sticky header row
+            const header = document.createElement('div');
+            header.id = 'col-header';
+            const headerGrid = document.createElement('div');
+            headerGrid.className = 'grid-row';
+            const nameHeader = document.createElement('div');
+            nameHeader.innerText = 'Leader';
+            headerGrid.appendChild(nameHeader);
+            COL_DEFS.forEach(col => {
+                const cell = document.createElement('div');
+                cell.className = 'metric-cell';
+                cell.innerText = col.label;
+                headerGrid.appendChild(cell);
+            });
+            header.appendChild(headerGrid);
+            container.appendChild(header);
+
+            const rootNodes = Object.values(tree);
+            const rootAvgMap = siblingAvg(rootNodes);
+            rootNodes.sort((a, b) => a.name.localeCompare(b.name)).forEach(node => {
+                container.appendChild(createNodeElement(node, rootAvgMap));
+            });
+        }
+
+        // Returns { metricIdx: avgValue } for every arrow-enabled column
+        function siblingAvg(nodes) {
+            const result = {};
+            if (!nodes || nodes.length === 0) return result;
+            COL_DEFS.filter(c => c.showArrow).forEach(col => {
+                result[col.idx] = nodes.reduce((sum, n) => sum + (n.metrics[col.idx] || 0), 0) / nodes.length;
+            });
+            return result;
+        }
+
+        function createNodeElement(node, sibAvgMap) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tree-node-container';
+
+            const hasChildren = node.children && Object.keys(node.children).length > 0;
+
+            const row = document.createElement('div');
+            row.className = 'tree-row';
+
+            const grid = document.createElement('div');
+            grid.className = 'grid-row';
+
+            // Name cell: chevron + name + level badge
+            const nameCell = document.createElement('div');
+            nameCell.className = 'name-cell';
+
+            const chevron = document.createElement('div');
+            chevron.className = 'chevron-box';
+            chevron.innerText = '▶';
+            if (!hasChildren) chevron.classList.add('empty');
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'node-name';
+            nameEl.innerText = node.name;
+            nameEl.title = node.name;
+
+            const levelEl = document.createElement('span');
+            levelEl.className = 'node-level';
+            levelEl.innerText = node.level;
+
+            nameCell.appendChild(chevron);
+            nameCell.appendChild(nameEl);
+            nameCell.appendChild(levelEl);
+            grid.appendChild(nameCell);
+
+            // Metric cells
+            COL_DEFS.forEach(col => {
+                const val = node.metrics[col.idx] || 0;
+                const cell = document.createElement('div');
+                cell.className = 'metric-cell';
+                cell.title = formatFull(val);   // full value on hover
+
+                const avg = sibAvgMap && sibAvgMap[col.idx];
+                if (col.showArrow && avg != null && avg > 0) {
+                    const isUp = val >= avg;
+                    const pct = ((val - avg) / avg * 100);
+                    const pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+                    cell.title = `${formatFull(val)} (${pctStr} vs group avg)`;
+                    const formatted = col.useK ? formatK(val) : formatFull(val);
+                    cell.innerHTML =
+                        `${formatted}&nbsp;<span style="color:${isUp ? '#22c55e' : '#ef4444'};font-size:11px;">${isUp ? '▲' : '▼'}</span>`;
+                } else {
+                    cell.innerText = col.useK ? formatK(val) : formatFull(val);
+                }
+                grid.appendChild(cell);
+            });
+
+            row.appendChild(grid);
+            wrapper.appendChild(row);
+
+            // Children
+            if (hasChildren) {
+                const childContainer = document.createElement('div');
+                childContainer.className = 'children-container';
+                const childNodes = Object.values(node.children);
+                const childAvgMap = siblingAvg(childNodes);
+                childNodes.sort((a, b) => a.name.localeCompare(b.name)).forEach(child => {
+                    childContainer.appendChild(createNodeElement(child, childAvgMap));
+                });
+                wrapper.appendChild(childContainer);
+
+                row.onclick = () => {
+                    childContainer.classList.toggle('expanded');
+                    chevron.classList.toggle('expanded');
+                };
+            }
+
+            return wrapper;
+        }
+    </script>
+</body>
+</html>
