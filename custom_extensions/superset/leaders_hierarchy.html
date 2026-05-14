@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaders Hierarchy - Superset</title>
+    <style>
+        :root { --bg-color: #ffffff; --text-color: #333; --font-family: 'Segoe UI', Tahoma, sans-serif; --font-size: 13px; }
+        * { box-sizing: border-box; }
+        body { font-family: var(--font-family); background: var(--bg-color); color: var(--text-color); font-size: var(--font-size); margin: 0; padding: 10px; user-select: none; }
+
+        .controls { display: flex; gap: 12px; align-items: flex-end; padding: 8px 12px; background: #f8f9fa; border-radius: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+        .controls .field { display: flex; flex-direction: column; gap: 3px; }
+        .controls label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.6; }
+        .controls input, .controls select { padding: 5px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+        .controls button { padding: 6px 16px; background: #0055A4; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .controls button:hover { background: #003d7a; }
+        .controls button.secondary { background: #666; }
+
+        #loading { font-style: italic; opacity: 0.7; margin-bottom: 6px; }
+        .error-msg { color: #ef4444; padding: 10px; background: #fef2f2; border-radius: 6px; margin: 8px 0; }
+        .success-msg { color: #22c55e; padding: 6px 10px; background: #f0fdf4; border-radius: 6px; font-size: 11px; }
+
+        .grid-row { display: grid; grid-template-columns: 1fr 90px 80px 80px 80px 80px 90px 120px; align-items: center; padding: 4px 8px; gap: 4px; }
+        #col-header { position: sticky; top: 0; z-index: 10; background: var(--bg-color); border-bottom: 2px solid rgba(128,128,128,0.25); margin-bottom: 4px; font-size: 11px; font-weight: 700; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.03em; }
+        #col-header .metric-cell { text-align: right; white-space: normal; line-height: 1.3; font-size: 10px; }
+
+        .tree-node-container { background: transparent; border: 1px solid rgba(128,128,128,0.2); border-radius: 8px; margin-bottom: 6px; padding: 2px; }
+        .tree-row { border-radius: 6px; cursor: pointer; transition: background 0.15s; }
+        .tree-row:hover { background: rgba(128,128,128,0.06); }
+        .name-cell { display: flex; align-items: center; gap: 5px; min-width: 0; }
+        .chevron-box { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 3px; background: rgba(128,128,128,0.1); font-size: 9px; transition: transform 0.15s; }
+        .chevron-box.expanded { transform: rotate(90deg); }
+        .chevron-box.empty { visibility: hidden; }
+        .node-name { font-weight: normal; font-size: 1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .metric-cell { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; cursor: default; white-space: nowrap; line-height: 1.3; }
+        .metric-change { font-size: 9px; opacity: 0.7; white-space: nowrap; }
+        .children-container { display: none; padding-left: 18px; border-left: 1px dashed rgba(128,128,128,0.2); margin-left: 12px; }
+        .children-container.expanded { display: block; }
+
+        /* Setup panel */
+        .setup-panel { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; max-width: 500px; margin: 40px auto; }
+        .setup-panel h3 { margin-top: 0; }
+        .setup-panel label { display: block; font-weight: 600; font-size: 12px; margin-top: 10px; }
+        .setup-panel input { width: 100%; padding: 6px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; }
+        .setup-panel button { margin-top: 14px; padding: 8px 16px; background: #0055A4; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; width: 100%; }
+        .setup-panel .hint { font-size: 11px; color: #888; margin-top: 2px; }
+    </style>
+</head>
+<body>
+    <!-- One-time setup panel -->
+    <div id="setup-panel" class="setup-panel" style="display:none;">
+        <h3>🔗 Connect to Superset</h3>
+        <label>Superset Base URL</label>
+        <input type="text" id="cfg-url" placeholder="http://localhost:8088" />
+        <div class="hint">Your Superset server URL (no trailing slash)</div>
+
+        <label>Database ID</label>
+        <input type="number" id="cfg-db-id" placeholder="1" />
+        <div class="hint">Find in Superset → Settings → Database Connections → click your DB → ID in URL</div>
+
+        <label>Table Name</label>
+        <input type="text" id="cfg-table" value="ai" />
+
+        <label>CSRF Token (if required)</label>
+        <input type="text" id="cfg-csrf" placeholder="Optional — leave blank to auto-fetch" />
+        <div class="hint">Only needed if you get 403 errors</div>
+
+        <button onclick="saveSetup()">Connect & Load</button>
+        <div id="setup-error" class="error-msg" style="display:none;"></div>
+    </div>
+
+    <!-- Main UI -->
+    <div id="main-ui" style="display:none;">
+        <div class="controls">
+            <div class="field">
+                <label>Start Date</label>
+                <input type="date" id="start-date" value="2026-01-01" />
+            </div>
+            <div class="field">
+                <label>N Weeks</label>
+                <input type="number" id="n-weeks" value="8" min="1" max="52" style="width:65px" />
+            </div>
+            <button onclick="fetchAndRender()">Apply</button>
+            <button class="secondary" onclick="showSetup()">⚙ Settings</button>
+        </div>
+        <div id="loading" style="display:none;">Loading data from Superset...</div>
+        <div id="error" class="error-msg" style="display:none;"></div>
+        <div id="tree-container"></div>
+    </div>
+
+    <script>
+        const COL_DEFS = [
+            { label: 'WS Credits', key: 'ws_credits', useK: false, showArrow: true },
+            { label: 'LOC Gen', key: 'loc_gen', useK: true, showArrow: true },
+            { label: 'LOC Acc', key: 'loc_acc', useK: true, showArrow: true },
+            { label: 'Acc %', key: 'acc_pct', fmt: 'pct', showArrow: true },
+            { label: 'LOC Com', key: 'loc_com', useK: true, showArrow: true },
+            { label: 'Active Users', key: 'active_users', useK: false, showArrow: true },
+            { label: 'WS / GM Lic', key: 'ws_lic', fmt: 'license', key2: 'gm_lic', showArrow: true },
+        ];
+        let prevPeriodMap = {};
+        let config = {};
+
+        function formatK(v) { if (v >= 1e6) return (v/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if (v >= 1e3) return (v/1e3).toFixed(1).replace(/\.0$/,'')+'K'; return Math.round(v).toString(); }
+        function formatFull(v) { return Math.round(v).toLocaleString(); }
+
+        // ---- Init ----
+        function init() {
+            const saved = localStorage.getItem('superset_hierarchy_v2');
+            if (saved) {
+                config = JSON.parse(saved);
+                document.getElementById('cfg-url').value = config.url || '';
+                document.getElementById('cfg-db-id').value = config.dbId || '';
+                document.getElementById('cfg-table').value = config.table || 'ai';
+                document.getElementById('main-ui').style.display = 'block';
+                fetchAndRender();
+            } else {
+                document.getElementById('setup-panel').style.display = 'block';
+            }
+        }
+
+        function showSetup() {
+            document.getElementById('setup-panel').style.display = 'block';
+            document.getElementById('main-ui').style.display = 'none';
+        }
+
+        function saveSetup() {
+            config = {
+                url: document.getElementById('cfg-url').value.trim().replace(/\/+$/, ''),
+                dbId: parseInt(document.getElementById('cfg-db-id').value) || 1,
+                table: document.getElementById('cfg-table').value.trim() || 'ai',
+                csrf: document.getElementById('cfg-csrf').value.trim()
+            };
+            localStorage.setItem('superset_hierarchy_v2', JSON.stringify(config));
+            document.getElementById('setup-panel').style.display = 'none';
+            document.getElementById('main-ui').style.display = 'block';
+            fetchAndRender();
+        }
+
+        // ---- Build SQL dynamically ----
+        function buildSQL(startDate, nWeeks, tableName) {
+            return `
+WITH current_period AS (
+    SELECT 'current' AS period, "L2 (VP)" AS l2, "L3 (Manager)" AS l3, "L4 (IC)" AS l4,
+        COALESCE(SUM("Credit Usage"),0) AS ws_credits, COALESCE(SUM("LOC Generated"),0) AS loc_gen,
+        COALESCE(SUM("LOC Accepted"),0) AS loc_acc, COALESCE(SUM("LOC Committed"),0) AS loc_com,
+        COALESCE(SUM("AI Active Users"),0) AS active_users,
+        COALESCE(SUM(CASE WHEN "Tool"='Windsurf' THEN "License Count" ELSE 0 END),0) AS ws_lic,
+        COALESCE(SUM(CASE WHEN "Tool"='Gemini' THEN "License Count" ELSE 0 END),0) AS gm_lic
+    FROM ${tableName}
+    WHERE date >= DATE '${startDate}' AND date < DATE '${startDate}' + (${nWeeks} * INTERVAL '7 days')
+    GROUP BY "L2 (VP)", "L3 (Manager)", "L4 (IC)"
+),
+previous_period AS (
+    SELECT 'previous' AS period, "L2 (VP)" AS l2, "L3 (Manager)" AS l3, "L4 (IC)" AS l4,
+        COALESCE(SUM("Credit Usage"),0) AS ws_credits, COALESCE(SUM("LOC Generated"),0) AS loc_gen,
+        COALESCE(SUM("LOC Accepted"),0) AS loc_acc, COALESCE(SUM("LOC Committed"),0) AS loc_com,
+        COALESCE(SUM("AI Active Users"),0) AS active_users,
+        COALESCE(SUM(CASE WHEN "Tool"='Windsurf' THEN "License Count" ELSE 0 END),0) AS ws_lic,
+        COALESCE(SUM(CASE WHEN "Tool"='Gemini' THEN "License Count" ELSE 0 END),0) AS gm_lic
+    FROM ${tableName}
+    WHERE date >= DATE '${startDate}' - (${nWeeks} * INTERVAL '7 days') AND date < DATE '${startDate}'
+    GROUP BY "L2 (VP)", "L3 (Manager)", "L4 (IC)"
+)
+SELECT * FROM current_period UNION ALL SELECT * FROM previous_period ORDER BY period, l2, l3, l4`;
+        }
+
+        // ---- Fetch from Superset SQL Lab API ----
+        async function fetchAndRender() {
+            const loadEl = document.getElementById('loading');
+            const errEl = document.getElementById('error');
+            loadEl.style.display = 'block'; loadEl.innerText = 'Fetching data from Superset...';
+            errEl.style.display = 'none';
+
+            const startDate = document.getElementById('start-date').value;
+            const nWeeks = parseInt(document.getElementById('n-weeks').value) || 8;
+            const sql = buildSQL(startDate, nWeeks, config.table);
+
+            try {
+                // Get CSRF token if not provided
+                let csrfToken = config.csrf;
+                if (!csrfToken) {
+                    try {
+                        const csrfResp = await fetch(`${config.url}/api/v1/security/csrf_token/`, { credentials: 'include' });
+                        if (csrfResp.ok) { const csrfJson = await csrfResp.json(); csrfToken = csrfJson.result; }
+                    } catch (e) { /* continue without CSRF */ }
+                }
+
+                const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+                if (csrfToken) headers['X-CSRFToken'] = csrfToken;
+
+                const resp = await fetch(`${config.url}/api/v1/sqllab/execute/`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers,
+                    body: JSON.stringify({ database_id: config.dbId, sql, queryLimit: 50000, runAsync: false })
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(`API error ${resp.status}: ${errText.substring(0, 200)}`);
+                }
+
+                const json = await resp.json();
+                if (json.status === 'error') throw new Error(json.error || 'Query failed');
+
+                // Convert column-based response to row objects
+                const columns = json.columns || json.result?.columns || [];
+                const dataRows = json.data || json.result?.data || [];
+                const rows = dataRows.map ? dataRows : [];
+
+                if (rows.length === 0) throw new Error('No data returned. Check your date range and table name.');
+
+                processAndRender(rows);
+                loadEl.style.display = 'none';
+            } catch (err) {
+                loadEl.style.display = 'none';
+                errEl.style.display = 'block';
+                errEl.innerText = err.message;
+            }
+        }
+
+        // ---- Data Processing ----
+        function processAndRender(rows) {
+            const currentRows = rows.filter(r => r.period === 'current');
+            const previousRows = rows.filter(r => r.period === 'previous');
+            const currentTree = buildTree(currentRows);
+            aggregateMetrics(currentTree);
+            const prevTree = buildTree(previousRows);
+            aggregateMetrics(prevTree);
+            prevPeriodMap = {};
+            flattenTree(prevTree, prevPeriodMap);
+            renderTreeUI(currentTree);
+        }
+
+        function buildTree(rows) {
+            let tree = {};
+            rows.forEach(row => {
+                const l2 = row.l2, l3 = row.l3, l4 = row.l4;
+                if (!l2 || l2 === 'Null' || l2 === 'null') return;
+                if (!tree[l2]) tree[l2] = { name: l2, children: {}, metrics: {} };
+                if (l3 && l3 !== 'Null' && l3 !== 'null') {
+                    if (!tree[l2].children[l3]) tree[l2].children[l3] = { name: l3, children: {}, metrics: {} };
+                    if (l4 && l4 !== 'Null' && l4 !== 'null') {
+                        if (!tree[l2].children[l3].children[l4]) tree[l2].children[l3].children[l4] = { name: l4, metrics: {} };
+                        addMetrics(tree[l2].children[l3].children[l4].metrics, row);
+                    }
+                }
+            });
+            return tree;
+        }
+
+        function addMetrics(m, r) {
+            ['ws_credits','loc_gen','loc_acc','loc_com','active_users','ws_lic','gm_lic'].forEach(k => {
+                m[k] = (m[k] || 0) + (parseFloat(r[k]) || 0);
+            });
+        }
+
+        function aggregateMetrics(nodes) {
+            Object.values(nodes).forEach(node => {
+                if (node.children && Object.keys(node.children).length > 0) {
+                    aggregateMetrics(node.children);
+                    node.metrics = {};
+                    Object.values(node.children).forEach(child => {
+                        Object.keys(child.metrics).forEach(k => {
+                            if (k === 'acc_pct') return;
+                            node.metrics[k] = (node.metrics[k] || 0) + (child.metrics[k] || 0);
+                        });
+                    });
+                }
+                const gen = node.metrics.loc_gen || 0;
+                node.metrics.acc_pct = gen > 0 ? node.metrics.loc_acc / gen : 0;
+            });
+        }
+
+        function flattenTree(nodes, map) {
+            Object.values(nodes).forEach(n => { map[n.name] = { ...n.metrics }; if (n.children) flattenTree(n.children, map); });
+        }
+
+        // ---- Rendering ----
+        function renderTreeUI(tree) {
+            const container = document.getElementById('tree-container');
+            container.innerHTML = '';
+            const header = document.createElement('div'); header.id = 'col-header';
+            const hGrid = document.createElement('div'); hGrid.className = 'grid-row';
+            const nh = document.createElement('div'); nh.innerText = 'Leader'; hGrid.appendChild(nh);
+            COL_DEFS.forEach(c => { const cell = document.createElement('div'); cell.className = 'metric-cell'; cell.innerText = c.label; hGrid.appendChild(cell); });
+            header.appendChild(hGrid); container.appendChild(header);
+            Object.values(tree).sort((a,b) => a.name.localeCompare(b.name)).forEach(n => container.appendChild(createNodeElement(n)));
+        }
+
+        function createNodeElement(node) {
+            const wrapper = document.createElement('div'); wrapper.className = 'tree-node-container';
+            const hasChildren = node.children && Object.keys(node.children).length > 0;
+            const row = document.createElement('div'); row.className = 'tree-row';
+            const grid = document.createElement('div'); grid.className = 'grid-row';
+
+            const nameCell = document.createElement('div'); nameCell.className = 'name-cell';
+            const chevron = document.createElement('div'); chevron.className = 'chevron-box'; chevron.innerText = '▶';
+            if (!hasChildren) chevron.classList.add('empty');
+            const nameEl = document.createElement('span'); nameEl.className = 'node-name'; nameEl.innerText = node.name; nameEl.title = node.name;
+            nameCell.appendChild(chevron); nameCell.appendChild(nameEl); grid.appendChild(nameCell);
+
+            const prev = prevPeriodMap[node.name] || null;
+            COL_DEFS.forEach(col => {
+                const val = node.metrics[col.key] || 0;
+                const cell = document.createElement('div'); cell.className = 'metric-cell';
+
+                if (col.fmt === 'license') {
+                    const ws = node.metrics[col.key]||0, gm = node.metrics[col.key2]||0, tot = ws+gm;
+                    const fmt = `${formatFull(ws)} / ${formatFull(gm)}`;
+                    if (col.showArrow && prev) {
+                        const pws = prev[col.key]||0, pgm = prev[col.key2]||0, ptot = pws+pgm;
+                        const pct = ptot > 0 ? ((tot-ptot)/ptot*100) : 0;
+                        const ps = (pct>=0?'+':'')+pct.toFixed(1)+'%';
+                        cell.title = `Current: WS ${formatFull(ws)} / GM ${formatFull(gm)}\nPrevious: WS ${formatFull(pws)} / GM ${formatFull(pgm)}\nChange: ${ps}`;
+                        cell.innerHTML = fmt + buildChangeLine(tot, ptot, ps);
+                    } else { cell.innerText = fmt; }
+                } else if (col.fmt === 'pct') {
+                    const pv = (val*100).toFixed(1)+'%';
+                    if (col.showArrow && prev) {
+                        const prv = prev[col.key]||0; const d = ((val-prv)*100).toFixed(1);
+                        const ds = (d>=0?'+':'')+d+'pp';
+                        cell.title = `Current: ${pv}\nPrevious: ${(prv*100).toFixed(1)}%\nChange: ${ds}`;
+                        cell.innerHTML = pv + buildChangeLine(val, prv, ds);
+                    } else { cell.innerText = pv; }
+                } else {
+                    const fmt = col.useK ? formatK(val) : formatFull(val);
+                    if (col.showArrow && prev) {
+                        const prv = prev[col.key]||0;
+                        const pct = prv > 0 ? ((val-prv)/prv*100) : (val>0?100:0);
+                        const ps = (pct>=0?'+':'')+pct.toFixed(1)+'%';
+                        cell.title = `Current: ${formatFull(val)}\nPrevious: ${formatFull(prv)}\nChange: ${ps}`;
+                        cell.innerHTML = fmt + buildChangeLine(val, prv, ps);
+                    } else { cell.innerText = fmt; }
+                }
+                grid.appendChild(cell);
+            });
+
+            row.appendChild(grid); wrapper.appendChild(row);
+            if (hasChildren) {
+                const cc = document.createElement('div'); cc.className = 'children-container';
+                Object.values(node.children).sort((a,b) => a.name.localeCompare(b.name)).forEach(c => cc.appendChild(createNodeElement(c)));
+                wrapper.appendChild(cc);
+                row.onclick = () => { cc.classList.toggle('expanded'); chevron.classList.toggle('expanded'); };
+            }
+            return wrapper;
+        }
+
+        function buildChangeLine(cur, prev, str) {
+            if (prev === 0 && cur === 0) return '';
+            const up = cur >= prev;
+            return `<div class="metric-change"><span style="color:${up?'#22c55e':'#ef4444'}">${up?'▲':'▼'}</span> ${str}</div>`;
+        }
+
+        init();
+    </script>
+</body>
+</html>
