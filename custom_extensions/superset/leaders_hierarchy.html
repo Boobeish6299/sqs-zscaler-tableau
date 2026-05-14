@@ -190,11 +190,11 @@ SELECT * FROM current_period UNION ALL SELECT * FROM previous_period ORDER BY pe
                 const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
                 if (csrfToken) headers['X-CSRFToken'] = csrfToken;
 
-                const resp = await fetch(`${config.url}/api/v1/sqllab/execute/`, {
+                const resp = await fetch(`${config.url}/superset/sql_json/`, {
                     method: 'POST',
                     credentials: 'include',
                     headers,
-                    body: JSON.stringify({ database_id: config.dbId, sql, queryLimit: 50000, runAsync: false })
+                    body: JSON.stringify({ database_id: config.dbId, sql, runAsync: false, client_id: Math.random().toString(36).substring(7) })
                 });
 
                 if (!resp.ok) {
